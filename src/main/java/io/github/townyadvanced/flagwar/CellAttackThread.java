@@ -17,7 +17,14 @@
 
 package io.github.townyadvanced.flagwar;
 
+import com.palmergames.bukkit.towny.TownyAPI;
+import com.palmergames.bukkit.towny.object.Nation;
+import com.palmergames.bukkit.towny.object.Town;
+import io.github.townyadvanced.flagwar.config.FlagWarConfig;
 import io.github.townyadvanced.flagwar.objects.CellUnderAttack;
+import io.github.townyadvanced.flagwar.war.WarManager;
+import io.github.townyadvanced.flagwar.war.WarPhase;
+import io.github.townyadvanced.flagwar.war.WarState;
 import java.util.TimerTask;
 
 /**
@@ -40,13 +47,65 @@ public class CellAttackThread extends TimerTask {
     /**
      * Updates the war flag within the {@link CellUnderAttack}, and if {@link CellUnderAttack#hasEnded()} becomes true,
      * runs {@link FlagWar#attackWon(CellUnderAttack)}.
+     * <p>
+     * During a truce, armistice, or online shortage the timer is frozen in place: the flag keeps its current phase
+     * and resumes from the same point once hostilities are allowed again.
+     * </p>
      */
     @Override
     public void run() {
 
+        if (!isCombatAllowed()) {
+            return;
+        }
+        var warState = getWarState();
+        if (warState != null) {
+            WarManager.getInstance().accumulateCombatTime(warState);
+            // A fatigue truce may have just begun; do not advance the flag during it.
+            if (warState.getPhase() != WarPhase.ACTIVE) {
+                return;
+            }
+        }
         cell.changeFlag();
         if (cell.hasEnded()) {
             FlagWar.attackWon(cell);
+        }
+    }
+
+    private WarState getWarState() {
+        Town town = TownyAPI.getInstance().getTown(cell.getFlagBaseBlock().getLocation());
+        if (town == null) {
+            return null;
+        }
+        try {
+            Nation defendingNation = town.getNation();
+            var resident = TownyAPI.getInstance().getResident(cell.getNameOfFlagOwner());
+            if (resident == null || !resident.hasNation()) {
+                return null;
+            }
+            return WarManager.getInstance().findWarBetween(resident.getNation(), defendingNation).orElse(null);
+        } catch (com.palmergames.bukkit.towny.exceptions.TownyException e) {
+            return null;
+        }
+    }
+
+    private boolean isCombatAllowed() {
+        if (!FlagWarConfig.isWarHooksEnabled()) {
+            return true;
+        }
+        Town town = TownyAPI.getInstance().getTown(cell.getFlagBaseBlock().getLocation());
+        if (town == null) {
+            return true;
+        }
+        try {
+            Nation defendingNation = town.getNation();
+            var resident = TownyAPI.getInstance().getResident(cell.getNameOfFlagOwner());
+            if (resident == null || !resident.hasNation()) {
+                return true;
+            }
+            return WarManager.getInstance().isCombatAllowed(resident.getNation(), defendingNation);
+        } catch (com.palmergames.bukkit.towny.exceptions.TownyException e) {
+            return true;
         }
     }
 }

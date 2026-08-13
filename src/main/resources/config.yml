@@ -162,6 +162,55 @@ warzone:
     protected_area_surrounding_flag: 0
     # The space above the flag where editable materials cannot be used.
     protected_area_above_flag: 20
+# War system: declaration delay, truces, betrayals, fatigue, armistice and negotiations.
+# These mechanics are opt-in. While war.active_flag_hooks is false, flags work exactly as before.
+war:
+    # Master switch for all new war mechanics.
+    active_flag_hooks: true
+    # Pause between declaring war and being able to place flags.
+    declaration-delay: "24h"
+
+truce:
+    # Duration of a truce requested via /fw truce.
+    default-duration: "24h"
+    # Maximum truce duration a nation may request.
+    max-duration: "48h"
+    # Cooldown before the same pair of nations can start another truce.
+    cooldown: "24h"
+
+betrayal:
+    # How long a nation that breaks a truce is marked as a traitor.
+    traitor-mark-duration: "7d"
+    # How long a traitor nation is barred from declaring wars and truces.
+    sanctions-duration: "7d"
+    # Window in which the offended nation may attack the traitor without the declaration delay.
+    vengeance-window: "48h"
+
+fatigue:
+    enabled: true
+    # Hours of active combat before an automatic truce is forced.
+    combat-hours-before-pause: 6.0
+    # Duration of the forced truce.
+    pause-duration: "12h"
+
+armistice:
+    # Scheduled windows where all hostilities are frozen.
+    enabled: false
+    windows:
+        -   days: "saturday"
+            start: "22:00"
+            end: "08:00"
+
+negotiation:
+    # Prefix for diplomacy channel messages.
+    channel-prefix: "&7[Diplomacy]"
+    # How many players from each side may join the diplomacy channel.
+    delegation-size: 3
+
+peace:
+    # Cooldown before the pair returns to normal relations after peace.
+    cooldown: "24h"
+
 extra:
     # If enabled, show additional debug messages as warnings. Recommended keeping these disabled unless requested.
     debug: false

@@ -17,6 +17,7 @@
 .externalToolBuilders
 /.settings
 /bin/
+.factorypath
 
 # Ignore the generated dependency-reduced-pom.xml
 dependency-reduced-pom.xml

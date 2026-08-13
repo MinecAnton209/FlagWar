@@ -26,6 +26,7 @@ import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NonNls;
 
 import java.time.Duration;
+import java.time.LocalTime;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -50,6 +51,17 @@ public final class FlagWarConfig {
         Material.LIME_WOOL, Material.GREEN_WOOL, Material.BLUE_WOOL, Material.CYAN_WOOL,
         Material.LIGHT_BLUE_WOOL, Material.GRAY_WOOL, Material.WHITE_WOOL,
         Material.PINK_WOOL, Material.ORANGE_WOOL, Material.RED_WOOL };
+
+    /** Default combat hours before a fatigue truce triggers. */
+    private static final double DEFAULT_FATIGUE_COMBAT_HOURS = 6.0;
+    /** Default number of delegates per side in the diplomacy channel. */
+    private static final int DEFAULT_DELEGATION_SIZE = 3;
+    /** Seconds in a day, for duration formatting. */
+    private static final long SECONDS_PER_DAY = 86400;
+    /** Seconds in an hour, for duration formatting. */
+    private static final long SECONDS_PER_HOUR = 3600;
+    /** Seconds in a minute, for duration formatting. */
+    private static final long SECONDS_PER_MINUTE = 60;
 
     /** Base material, or the war flag's post. */
     private static Material flagBaseMaterial = null;
@@ -598,5 +610,176 @@ public final class FlagWarConfig {
     /** @return the line of the hologram which contains the timer.*/
     public static int getHologramTimerLineIndex() {
         return hologramTimerLineIndex;
+    }
+
+    // --------------------------------------------------------------
+    // War system
+    // --------------------------------------------------------------
+
+    /** @return whether the war mechanics master switch is enabled. */
+    public static boolean isWarHooksEnabled() {
+        return PLUGIN.getConfig().getBoolean("war.active_flag_hooks", true);
+    }
+
+    /** @return the {@link Duration} between a war declaration and the start of hostilities. */
+    public static Duration getWarDeclarationDelay() {
+        final String value = PLUGIN.getConfig().getString("war.declaration-delay", "24h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return the declaration delay, formatted for human-readable broadcast messages. */
+    public static String getFormattedDeclarationDelay() {
+        return formatDuration(getWarDeclarationDelay());
+    }
+
+    /** @return the default truce length requested by {@code /fw truce}. */
+    public static Duration getTruceDefaultDuration() {
+        final String value = PLUGIN.getConfig().getString("truce.default-duration", "24h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return the default truce length, formatted for human-readable broadcast messages. */
+    public static String getFormattedTruceDuration() {
+        return formatDuration(getTruceDefaultDuration());
+    }
+
+    /** @return the maximum truce length a nation may request. */
+    public static Duration getTruceMaxDuration() {
+        final String value = PLUGIN.getConfig().getString("truce.max-duration", "48h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return how long a nation must wait before starting another truce with the same opponent. */
+    public static Duration getTruceCooldown() {
+        final String value = PLUGIN.getConfig().getString("truce.cooldown", "24h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return how long a betraying nation stays marked as a traitor. */
+    public static Duration getTraitorMarkDuration() {
+        final String value = PLUGIN.getConfig().getString("betrayal.traitor-mark-duration", "7d");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return how long a betraying nation is barred from declaring wars and truces. */
+    public static Duration getSanctionsDuration() {
+        final String value = PLUGIN.getConfig().getString("betrayal.sanctions-duration", "7d");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return how long an offended nation may attack the betrayer without the declaration delay. */
+    public static Duration getVengeanceWindow() {
+        final String value = PLUGIN.getConfig().getString("betrayal.vengeance-window", "48h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return whether the combat fatigue auto-truce is enabled. */
+    public static boolean isFatigueEnabled() {
+        return PLUGIN.getConfig().getBoolean("fatigue.enabled", true);
+    }
+
+    /** @return how many hours of ACTIVE-phase combat trigger a fatigue truce. */
+    public static double getFatigueCombatHoursBeforePause() {
+        return PLUGIN.getConfig().getDouble("fatigue.combat-hours-before-pause", DEFAULT_FATIGUE_COMBAT_HOURS);
+    }
+
+    /** @return how long a fatigue truce lasts. */
+    public static Duration getFatiguePauseDuration() {
+        final String value = PLUGIN.getConfig().getString("fatigue.pause-duration", "12h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return whether scheduled armistice windows are enabled. */
+    public static boolean isArmisticeEnabled() {
+        return PLUGIN.getConfig().getBoolean("armistice.enabled", false);
+    }
+
+    /** @return the configured scheduled armistice windows. */
+    public static List<ArmisticeWindow> getArmisticeWindows() {
+        List<ArmisticeWindow> windows = new ArrayList<>();
+        ConfigurationSection section = PLUGIN.getConfig().getConfigurationSection("armistice.windows");
+        if (section == null) {
+            return windows;
+        }
+        for (String key : section.getKeys(false)) {
+            try {
+                String days = section.getString(key + ".days", "");
+                String start = section.getString(key + ".start", "00:00");
+                String end = section.getString(key + ".end", "00:00");
+                windows.add(new ArmisticeWindow(
+                    List.of(days.split(",")), LocalTime.parse(start), LocalTime.parse(end)));
+            } catch (java.time.format.DateTimeParseException e) {
+                LOGGER.warning("Invalid armistice window time format in " + key);
+            }
+        }
+        return windows;
+    }
+
+    /** @return how long a pair of nations stays in the post-peace cooldown before returning to NONE. */
+    public static Duration getPeaceCooldown() {
+        final String value = PLUGIN.getConfig().getString("peace.cooldown", "24h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return the prefix for diplomacy channel messages. */
+    public static String getDiplomacyChannelPrefix() {
+        return Colors.translateColorCodes(PLUGIN.getConfig().getString("negotiation.channel-prefix", "&7[Diplomacy]"));
+    }
+
+    /** @return how many delegates per side may join the diplomacy channel. */
+    public static int getDiplomacyDelegationSize() {
+        return PLUGIN.getConfig().getInt("negotiation.delegation-size", DEFAULT_DELEGATION_SIZE);
+    }
+
+    /**
+     * Formats a {@link Duration} for human-readable broadcast messages.
+     * @param duration the duration to format.
+     * @return a string like "1d 2h" or "30m".
+     */
+    public static String formatDuration(final Duration duration) {
+        long total = duration.toSeconds();
+        long days = total / SECONDS_PER_DAY;
+        long hours = (total % SECONDS_PER_DAY) / SECONDS_PER_HOUR;
+        long minutes = (total % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+        if (days > 0) {
+            return String.format("%dd %dh", days, hours);
+        }
+        if (hours > 0) {
+            return String.format("%dh %dm", hours, minutes);
+        }
+        return String.format("%dm", minutes);
+    }
+
+    /**
+     * A scheduled window during which all hostilities are frozen.
+     */
+    public static final class ArmisticeWindow {
+        /** The lower-case day names the window applies to. */
+        private final List<String> days;
+        /** The window's start time. */
+        private final LocalTime start;
+        /** The window's end time (exclusive). */
+        private final LocalTime end;
+
+        ArmisticeWindow(final List<String> newDays, final LocalTime newStart, final LocalTime newEnd) {
+            days = newDays;
+            start = newStart;
+            end = newEnd;
+        }
+
+        /** @return the lower-case day names the window applies to. */
+        public List<String> getDays() {
+            return days;
+        }
+
+        /** @return the window's inclusive start time. */
+        public LocalTime getStart() {
+            return start;
+        }
+
+        /** @return the window's exclusive end time. */
+        public LocalTime getEnd() {
+            return end;
+        }
     }
 }

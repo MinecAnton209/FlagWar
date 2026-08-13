@@ -23,3 +23,30 @@ softdepend:
 
 depend:
     - Towny
+
+commands:
+    flagwar:
+        description: FlagWar war management commands.
+        usage: "/flagwar <declare|status|truce|peace|chat|betray>"
+        aliases: [fw]
+        permission: flagwar.use
+
+permissions:
+    flagwar.use:
+        description: Allows usage of FlagWar war commands.
+        default: true
+    flagwar.declare:
+        description: Allows declaring war on other nations.
+        default: true
+    flagwar.truce:
+        description: Allows proposing and accepting truces.
+        default: true
+    flagwar.peace:
+        description: Allows proposing and accepting peace treaties.
+        default: true
+    flagwar.betray:
+        description: Allows breaking active truces.
+        default: true
+    flagwar.diplomat:
+        description: Marks the player as a nation diplomat, joining the diplomacy channel.
+        default: false

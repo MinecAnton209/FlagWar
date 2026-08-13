@@ -35,6 +35,7 @@ import com.palmergames.bukkit.towny.scheduling.impl.FoliaTaskScheduler;
 import com.palmergames.bukkit.towny.utils.AreaSelectionUtil;
 import com.palmergames.bukkit.util.Version;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import io.github.townyadvanced.flagwar.command.FlagWarCommand;
 import io.github.townyadvanced.flagwar.command.TownyAdminReloadAddon;
 import io.github.townyadvanced.flagwar.config.ConfigLoader;
 import io.github.townyadvanced.flagwar.config.FlagWarConfig;
@@ -47,10 +48,14 @@ import io.github.townyadvanced.flagwar.i18n.Translate;
 import io.github.townyadvanced.flagwar.listeners.FlagWarBlockListener;
 import io.github.townyadvanced.flagwar.listeners.FlagWarCustomListener;
 import io.github.townyadvanced.flagwar.listeners.FlagWarEntityListener;
+import io.github.townyadvanced.flagwar.listeners.FlagWarWarListener;
 import io.github.townyadvanced.flagwar.listeners.WarzoneListener;
 import io.github.townyadvanced.flagwar.listeners.OutlawListener;
 import io.github.townyadvanced.flagwar.objects.Cell;
 import io.github.townyadvanced.flagwar.objects.CellUnderAttack;
+import io.github.townyadvanced.flagwar.war.WarManager;
+import io.github.townyadvanced.flagwar.war.WarPhase;
+import io.github.townyadvanced.flagwar.war.WarState;
 
 import java.io.IOException;
 
@@ -100,6 +105,10 @@ public class FlagWar extends JavaPlugin {
     private static final Version VALID_TOWNY_VER = Version.fromString("0.102.0.6");
     /** Value of minimum configuration file version. Used for determining if file should be regenerated. */
     private static final double MIN_CONFIG_VER = 1.6;
+    /** Ticks between war-state ticker runs, i.e. the ticker cadence. */
+    private static final long WAR_TICK_DELAY = 20L;
+    /** Ticks between war-state ticker runs, i.e. the ticker cadence. */
+    private static final long WAR_TICK_PERIOD = 20L;
     /** BStats Metrics ID. */
     public static final int METRICS_ID = 10325;
     /** Holds FlagWar's Bukkit-assigned JUL {@link Logger}. */
@@ -119,6 +128,8 @@ public class FlagWar extends JavaPlugin {
     private FlagWarCustomListener flagWarCustomListener;
     /** Holds instance of the {@link FlagWarEntityListener}. */
     private FlagWarEntityListener flagWarEntityListener;
+    /** Holds instance of the {@link FlagWarWarListener}. */
+    private FlagWarWarListener flagWarWarListener;
     /** Holds instance of the {@link WarzoneListener}. */
     private WarzoneListener warzoneListener;
     /** Holds instance of the {@link OutlawListener}. */
@@ -148,6 +159,7 @@ public class FlagWar extends JavaPlugin {
             bStatsKickstart();
 
             new TownyAdminReloadAddon();
+            initializeWarSystem();
         }
     }
 
@@ -225,6 +237,7 @@ public class FlagWar extends JavaPlugin {
         PLUGIN_MANAGER.registerEvents(flagWarBlockListener, this);
         PLUGIN_MANAGER.registerEvents(flagWarCustomListener, this);
         PLUGIN_MANAGER.registerEvents(flagWarEntityListener, this);
+        PLUGIN_MANAGER.registerEvents(flagWarWarListener, this);
         PLUGIN_MANAGER.registerEvents(warzoneListener, this);
         PLUGIN_MANAGER.registerEvents(outlawListener, this);
         FW_LOGGER.log(Level.INFO, () -> Translate.from("startup.events.registered"));
@@ -236,9 +249,24 @@ public class FlagWar extends JavaPlugin {
         flagWarBlockListener = new FlagWarBlockListener(this);
         flagWarCustomListener = new FlagWarCustomListener(this);
         flagWarEntityListener = new FlagWarEntityListener();
+        flagWarWarListener = new FlagWarWarListener();
         warzoneListener = new WarzoneListener();
         outlawListener = new OutlawListener();
         FW_LOGGER.log(Level.INFO, () -> Translate.from("startup.listeners.initialized"));
+    }
+
+    /** Restores war state from metadata, registers the {@code /fw} command, and starts the war ticker. */
+    private void initializeWarSystem() {
+        WarManager.getInstance().reloadFromMetadata();
+
+        var warCommand = new FlagWarCommand();
+        var pluginCommand = getCommand("flagwar");
+        if (pluginCommand != null) {
+            pluginCommand.setExecutor(warCommand);
+            pluginCommand.setTabCompleter(warCommand);
+        }
+
+        getScheduler().runRepeating(() -> WarManager.getInstance().tick(), WAR_TICK_DELAY, WAR_TICK_PERIOD);
     }
 
     /** @return the FlagWar {@link #plugin} instance. */
@@ -526,6 +554,8 @@ public class FlagWar extends JavaPlugin {
 
         checkTargetPeaceful(player, townyUniverse, landOwnerNation, attackingNation);
 
+        checkWarPhaseAllowsFlag(landOwnerNation, attackingNation);
+
         checkPlayerLimits(landOwnerTown, attackingTown, landOwnerNation, attackingNation);
 
         // Check that attack takes place on the edge of a town
@@ -740,6 +770,43 @@ public class FlagWar extends JavaPlugin {
         if (!townyUniverse.getPermissionSource().isTownyAdmin(player) && attackingNation.isNeutral()) {
             throw new TownyException(Translate.fromPrefixed("error.target-is-peaceful", attackingNation
                 .getFormattedName()));
+        }
+    }
+
+    /**
+     * Rejects flag placement while the war system forbids hostilities between the two nations.
+     * <p>
+     * Before the declaration delay elapses, or while a truce, negotiation, or peace is in effect, no flag may
+     * be placed. The only exception is an active vengeance window, which lets the offended nation attack the
+     * betrayer immediately.
+     * </p>
+     *
+     * @param landOwnerNation the nation owning the plot.
+     * @param attackingNation the nation trying to place the flag.
+     * @throws TownyException when the war phase forbids the flag.
+     */
+    private static void checkWarPhaseAllowsFlag(final Nation landOwnerNation,
+                                                final Nation attackingNation) throws TownyException {
+        if (!FlagWarConfig.isWarHooksEnabled()) {
+            return;
+        }
+        if (!WarManager.getInstance().isFlagPlacementAllowed(attackingNation, landOwnerNation)) {
+            WarState state = WarManager.getInstance().findWarBetween(attackingNation, landOwnerNation).orElse(null);
+            String reason;
+            if (state == null || state.getPhase() == WarPhase.NONE) {
+                reason = Translate.from("war.error.no-war-between");
+            } else {
+                reason = switch (state.getPhase()) {
+                    case DECLARED -> Translate.from("war.error.declared-pending",
+                        FlagWarConfig.formatDuration(java.time.Duration.between(java.time.Instant.now(),
+                            state.getActiveAt())));
+                    case TRUCE -> Translate.from("war.error.truce-active");
+                    case NEGOTIATING -> Translate.from("war.error.negotiating-active");
+                    case PEACE -> Translate.from("war.error.peace-active");
+                    default -> Translate.from("war.error.no-war-between");
+                };
+            }
+            throw new TownyException(reason);
         }
     }
 
