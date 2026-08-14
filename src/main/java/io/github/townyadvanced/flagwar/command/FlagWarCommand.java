@@ -25,6 +25,7 @@ import com.palmergames.bukkit.towny.object.WorldCoord;
 import io.github.townyadvanced.flagwar.config.FlagWarConfig;
 import io.github.townyadvanced.flagwar.i18n.Translate;
 import io.github.townyadvanced.flagwar.util.Messaging;
+import io.github.townyadvanced.flagwar.war.DiplomacyChannel;
 import io.github.townyadvanced.flagwar.war.Treaty;
 import io.github.townyadvanced.flagwar.war.WarManager;
 import io.github.townyadvanced.flagwar.war.WarPhase;
@@ -97,7 +98,7 @@ public final class FlagWarCommand implements TabExecutor {
             case "negotiate" -> cmdNegotiate(sender, args);
             case "treaty" -> cmdTreaty(sender, args);
             case "betray" -> cmdBetray(sender);
-            case "chat" -> cmdChat(sender);
+            case "chat" -> cmdChat(sender, args);
             default -> send(sender, "war.command.usage");
         }
         return true;
@@ -593,7 +594,7 @@ public final class FlagWarCommand implements TabExecutor {
         send(sender, "war.command.betray.done");
     }
 
-    private void cmdChat(final CommandSender sender) {
+    private void cmdChat(final CommandSender sender, final String[] args) {
         if (!requirePlayer(sender)) {
             return;
         }
@@ -608,15 +609,40 @@ public final class FlagWarCommand implements TabExecutor {
             send(sender, "error.player-not-in-nation");
             return;
         }
-        WarState state = WarManager.getInstance().getWarsFor(nation).stream()
-            .filter(s -> s.getPhase() == WarPhase.TRUCE || s.getPhase() == WarPhase.NEGOTIATING)
-            .findFirst().orElse(null);
+        DiplomacyChannel channel = WarManager.getInstance().getActiveChannel();
+        if (args.length >= 2 && args[1].equalsIgnoreCase("leave")) {
+            if (channel == null || !channel.removeMember(resident)) {
+                send(sender, "war.error.not-in-channel");
+                return;
+            }
+            send(sender, "war.command.chat.left");
+            return;
+        }
+        WarState state;
+        if (args.length >= 2) {
+            Nation opponent = TownyAPI.getInstance().getNation(args[1]);
+            if (opponent == null) {
+                send(sender, "war.error.nation-not-found", args[1]);
+                return;
+            }
+            state = WarManager.getInstance().findWarBetween(nation, opponent)
+                .filter(s -> s.getPhase() == WarPhase.TRUCE || s.getPhase() == WarPhase.NEGOTIATING)
+                .orElse(null);
+        } else {
+            state = WarManager.getInstance().getWarsFor(nation).stream()
+                .filter(s -> s.getPhase() == WarPhase.TRUCE || s.getPhase() == WarPhase.NEGOTIATING)
+                .findFirst().orElse(null);
+        }
         if (state == null) {
             send(sender, "war.error.no-chat");
             return;
         }
-        WarManager.getInstance().openChannel(state);
-        send(sender, "war.command.chat.joined");
+        channel = WarManager.getInstance().openChannel(state);
+        if (channel.addMember(resident)) {
+            send(sender, "war.command.chat.joined");
+        } else {
+            send(sender, "war.error.channel-full");
+        }
     }
 
     /**
@@ -690,6 +716,9 @@ public final class FlagWarCommand implements TabExecutor {
         if (args.length == 2) {
             if (args[0].equalsIgnoreCase("negotiate")) {
                 return filterList(List.of("abort"), args[1]);
+            }
+            if (args[0].equalsIgnoreCase("chat")) {
+                return filterList(List.of("leave"), args[1]);
             }
             if (args[0].equalsIgnoreCase("peace") && args[1].equalsIgnoreCase("accept")) {
                 return filterList(List.of("accept"), args[1]);

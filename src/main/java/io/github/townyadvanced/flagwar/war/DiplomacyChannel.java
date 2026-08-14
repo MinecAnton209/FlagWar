@@ -17,6 +17,7 @@
 
 package io.github.townyadvanced.flagwar.war;
 
+import com.palmergames.bukkit.towny.TownyAPI;
 import com.palmergames.bukkit.towny.object.Nation;
 import com.palmergames.bukkit.towny.object.Resident;
 import io.github.townyadvanced.flagwar.config.FlagWarConfig;
@@ -24,6 +25,7 @@ import io.github.townyadvanced.flagwar.i18n.Translate;
 import org.bukkit.Bukkit;
 
 import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -93,6 +95,50 @@ public class DiplomacyChannel {
     /** @return the currently registered member UUIDs. */
     public Set<UUID> getMembers() {
         return members;
+    }
+
+    /**
+     * Adds a resident to the channel, capping each side's delegation.
+     * @param resident the resident to add.
+     * @return true when the resident joined, false when the delegation is full.
+     */
+    public boolean addMember(final Resident resident) {
+        if (members.contains(resident.getUUID())) {
+            return true;
+        }
+        Nation side = residentSide(resident);
+        if (side == null) {
+            return false;
+        }
+        int cap = FlagWarConfig.getDiplomacyDelegationSize();
+        long sideCount = members.stream().map(Bukkit::getPlayer)
+            .filter(Objects::nonNull)
+            .map(TownyAPI.getInstance()::getResident)
+            .filter(Objects::nonNull)
+            .filter(m -> residentSide(m) == side).count();
+        if (sideCount >= cap) {
+            return false;
+        }
+        return members.add(resident.getUUID());
+    }
+
+    /**
+     * Removes a resident from the channel.
+     * @param resident the resident to remove.
+     * @return true when the resident was a member.
+     */
+    public boolean removeMember(final Resident resident) {
+        return members.remove(resident.getUUID());
+    }
+
+    private static Nation residentSide(final Resident resident) {
+        Nation nation;
+        try {
+            nation = resident.getNation();
+        } catch (com.palmergames.bukkit.towny.exceptions.TownyException e) {
+            return null;
+        }
+        return nation;
     }
 
     /** @return whether the channel is open for traffic. */
