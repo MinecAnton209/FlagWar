@@ -47,14 +47,14 @@ public class WarState {
     private Instant activeAt;
     /** Instant at which an active truce ends and the war resumes. */
     private Instant truceEndsAt;
-    /** Remaining seconds of an in-flight capture, preserved across truces. */
-    private long remainingCaptureSeconds;
     /** Seconds of ACTIVE-phase combat accumulated, driving the fatigue auto-truce. */
     private long combatSecondsAccumulated;
     /** True when the current truce was forced by fatigue, bypassing the truce cooldown. */
     private boolean autoTruce;
     /** The peace treaty, when the war reaches {@link WarPhase#NEGOTIATING}. */
     private Treaty treaty;
+    /** Instant of the last negotiation activity, driving the negotiation timeout. */
+    private Instant negotiationLastActivity;
 
     /**
      * Constructs a fresh DECLARED war state.
@@ -135,16 +135,6 @@ public class WarState {
         return truceEndsAt == null ? 0 : Math.max(0, Duration.between(Instant.now(), truceEndsAt).toSeconds());
     }
 
-    /** @return the remaining capture seconds preserved across a truce. */
-    public long getRemainingCaptureSeconds() {
-        return remainingCaptureSeconds;
-    }
-
-    /** @param seconds the remaining capture seconds to preserve across a truce. */
-    public void setRemainingCaptureSeconds(final long seconds) {
-        this.remainingCaptureSeconds = seconds;
-    }
-
     /** @return accumulated ACTIVE-phase combat seconds, before a fatigue truce. */
     public long getCombatSecondsAccumulated() {
         return combatSecondsAccumulated;
@@ -171,6 +161,21 @@ public class WarState {
     /** @param forced true when the current truce was forced by fatigue. */
     public void setAutoTruce(final boolean forced) {
         this.autoTruce = forced;
+    }
+
+    /**
+     * @return the instant of the last negotiation activity, or null when no activity has occurred yet.
+     */
+    public Instant getNegotiationLastActivity() {
+        return negotiationLastActivity;
+    }
+
+    /**
+     * Records a negotiation activity, resetting the negotiation timeout.
+     * @param instant the timestamp of the activity.
+     */
+    public void setNegotiationLastActivity(final Instant instant) {
+        this.negotiationLastActivity = instant;
     }
 
     /** @return the peace treaty, or null when none has been proposed. */

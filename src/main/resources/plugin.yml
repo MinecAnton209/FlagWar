@@ -27,7 +27,7 @@ depend:
 commands:
     flagwar:
         description: FlagWar war management commands.
-        usage: "/flagwar <declare|status|truce|peace|chat|betray>"
+        usage: "/flagwar <declare|status|truce|peace|negotiate|treaty|chat|betray>"
         aliases: [fw]
         permission: flagwar.use
 
@@ -50,3 +50,9 @@ permissions:
     flagwar.diplomat:
         description: Marks the player as a nation diplomat, joining the diplomacy channel.
         default: false
+    flagwar.negotiate:
+        description: Allows aborting peace negotiations.
+        default: true
+    flagwar.treaty:
+        description: Allows editing, submitting and accepting peace treaty drafts.
+        default: true

@@ -185,6 +185,8 @@ betrayal:
     sanctions-duration: "7d"
     # Window in which the offended nation may attack the traitor without the declaration delay.
     vengeance-window: "48h"
+    # How long a nation that breaks off negotiations may not re-open talks with the same opponent.
+    abort-cooldown: "24h"
 
 fatigue:
     enabled: true
@@ -206,6 +208,8 @@ negotiation:
     channel-prefix: "&7[Diplomacy]"
     # How many players from each side may join the diplomacy channel.
     delegation-size: 3
+    # How long negotiations may run before they time out and the war resumes.
+    timeout: "2h"
 
 peace:
     # Cooldown before the pair returns to normal relations after peace.

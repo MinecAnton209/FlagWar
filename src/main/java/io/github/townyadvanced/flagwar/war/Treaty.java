@@ -25,16 +25,23 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * A proposed or signed peace treaty between two warring nations.
+ * A peace treaty between two warring nations.
+ * <p>
+ * A treaty begins as an editable draft while the war is in {@link WarPhase#NEGOTIATING}: both delegations may add
+ * or remove plots, set reparations and the neutrality period, or mark the draft as a white peace. Drafts are sent
+ * to the other side with {@link #submit()}, signed individually per side with {@link #acceptBy(String)}, and only
+ * become final when both sides have accepted. Signing freezes the terms into an immutable snapshot so the peace
+ * execution cannot race later edits.
+ * </p>
  */
 public class Treaty {
 
-    /** Whether both sides have accepted the treaty. */
-    private boolean accepted = false;
-    /** Whether the declaring nation has accepted. */
-    private boolean acceptedByAttacker = false;
-    /** Whether the target nation has accepted. */
-    private boolean acceptedByDefender = false;
+    /** Whether the draft has been formally sent to the other delegation. */
+    private boolean submitted;
+    /** Whether the declaring nation has accepted the submitted draft. */
+    private boolean acceptedByAttacker;
+    /** Whether the target nation has accepted the submitted draft. */
+    private boolean acceptedByDefender;
     /** Timestamp of the final acceptance, used to stamp the neutrality period. */
     private Instant signedAt;
     /** Plots the defender agrees to return to the attacker. */
@@ -43,19 +50,33 @@ public class Treaty {
     private double reparations;
     /** Number of days of mandated peace after signing. */
     private int neutralityDays;
+    /** Explicit choice of an unconditional peace. */
+    private boolean whitePeace;
+    /** Immutable copy of the terms, taken when the treaty becomes final. */
+    private List<WorldCoord> signedPlots;
+    /** Reparations at the moment of signing. */
+    private double signedReparations;
+    /** Neutrality days at the moment of signing. */
+    private int signedNeutralityDays;
 
-    /** @return true once both sides have accepted the treaty. */
-    public boolean isAccepted() {
-        return accepted;
+    /** @return true once the draft has been submitted to the other side. */
+    public boolean isSubmitted() {
+        return submitted;
     }
 
-    /** @param signed true once both sides have accepted the treaty. */
-    public void setAccepted(final boolean signed) {
-        this.accepted = signed;
-        this.signedAt = signed ? Instant.now() : null;
+    /** Marks the draft as formally sent to the other delegation. */
+    public void submit() {
+        this.submitted = true;
     }
 
-    /** @return whether the declaring nation has accepted. */
+    /** Returns a submitted draft to the editing state, clearing any acceptances. */
+    public void reject() {
+        this.submitted = false;
+        this.acceptedByAttacker = false;
+        this.acceptedByDefender = false;
+    }
+
+    /** @return whether the declaring nation has accepted the submitted draft. */
     public boolean isAcceptedByAttacker() {
         return acceptedByAttacker;
     }
@@ -65,7 +86,7 @@ public class Treaty {
         this.acceptedByAttacker = hasAccepted;
     }
 
-    /** @return whether the target nation has accepted. */
+    /** @return whether the target nation has accepted the submitted draft. */
     public boolean isAcceptedByDefender() {
         return acceptedByDefender;
     }
@@ -75,15 +96,23 @@ public class Treaty {
         this.acceptedByDefender = hasAccepted;
     }
 
+    /** @return true once both sides have accepted the submitted draft. */
+    public boolean isAccepted() {
+        return acceptedByAttacker && acceptedByDefender;
+    }
+
     /**
-     * Marks one side as accepting, and flips {@link #accepted} when both sides have.
+     * Marks one side as accepting the submitted draft, stamping the signed terms once both sides agree.
      * @param nationKey the registry key of the accepting nation.
      */
     public void acceptBy(final String nationKey) {
         acceptedByAttacker = acceptedByAttacker || nationKey.equals("attacker");
         acceptedByDefender = acceptedByDefender || nationKey.equals("defender");
-        if (acceptedByAttacker && acceptedByDefender) {
-            setAccepted(true);
+        if (isAccepted() && signedAt == null) {
+            signedAt = Instant.now();
+            signedPlots = List.copyOf(plotsToReturn);
+            signedReparations = reparations;
+            signedNeutralityDays = neutralityDays;
         }
     }
 
@@ -93,11 +122,22 @@ public class Treaty {
     }
 
     /**
-     * Adds a plot to be returned to the attacker upon signing.
+     * Adds a plot to be returned to the attacker upon signing. No effect once the treaty is signed.
      * @param coord the plot to return.
      */
     public void addPlotToReturn(final WorldCoord coord) {
-        plotsToReturn.add(coord);
+        if (signedAt == null && !plotsToReturn.contains(coord)) {
+            plotsToReturn.add(coord);
+        }
+    }
+
+    /**
+     * Removes a plot from the return list. No effect once the treaty is signed.
+     * @param coord the plot to return.
+     * @return true when the plot was on the list.
+     */
+    public boolean removePlotToReturn(final WorldCoord coord) {
+        return signedAt == null && plotsToReturn.remove(coord);
     }
 
     /** @return an unmodifiable view of the plots to return. */
@@ -110,9 +150,12 @@ public class Treaty {
         return reparations;
     }
 
-    /** @param amount reparations the defender pays to the attacker. */
+    /**
+     * Sets the reparations amount.
+     * @param amount the new amount, clamped to zero when negative.
+     */
     public void setReparations(final double amount) {
-        this.reparations = amount;
+        this.reparations = Math.max(0, amount);
     }
 
     /** @return days of mandated peace after signing. */
@@ -120,8 +163,41 @@ public class Treaty {
         return neutralityDays;
     }
 
-    /** @param days days of mandated peace after signing. */
+    /**
+     * Sets the neutrality period.
+     * @param days the number of days, clamped to zero when negative.
+     */
     public void setNeutralityDays(final int days) {
-        this.neutralityDays = days;
+        this.neutralityDays = Math.max(0, days);
+    }
+
+    /** @return true when the draft is an unconditional white peace. */
+    public boolean isWhitePeace() {
+        return whitePeace;
+    }
+
+    /** @param unconditional whether the draft is an unconditional white peace. */
+    public void setWhitePeace(final boolean unconditional) {
+        this.whitePeace = unconditional;
+    }
+
+    /** @return true when the draft carries at least one concrete condition. */
+    public boolean hasConditions() {
+        return !plotsToReturn.isEmpty() || reparations > 0;
+    }
+
+    /** @return the frozen plot list, or null before signing. */
+    public List<WorldCoord> getSignedPlots() {
+        return signedPlots;
+    }
+
+    /** @return the frozen reparations, or zero before signing. */
+    public double getSignedReparations() {
+        return signedReparations;
+    }
+
+    /** @return the frozen neutrality days, or zero before signing. */
+    public int getSignedNeutralityDays() {
+        return signedNeutralityDays;
     }
 }

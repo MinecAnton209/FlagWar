@@ -37,10 +37,13 @@ import org.bukkit.Bukkit;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Registry and state machine for all wars between nations.
@@ -58,12 +61,32 @@ public final class WarManager {
     private static final String META_PHASE = "flagwar_war_phase";
     /** Metadata key on the attacker nation holding the war's activeAt timestamp. */
     private static final String META_ACTIVE_AT = "flagwar_war_active_at";
+    /** Metadata key on the attacker nation holding when the current phase began. */
+    private static final String META_PHASE_STARTED_AT = "flagwar_war_phase_started_at";
     /** Metadata key on the attacker nation holding the truceEndsAt timestamp. */
     private static final String META_TRUCE_ENDS_AT = "flagwar_war_truce_ends_at";
-    /** Metadata key on the attacker nation holding preserved capture seconds. */
-    private static final String META_REMAINING_CAPTURE = "flagwar_war_remaining_capture";
     /** Metadata key on the attacker nation holding accumulated combat seconds. */
     private static final String META_COMBAT_SECONDS = "flagwar_war_combat_seconds";
+    /** Metadata key on the attacker nation holding whether the current truce was fatigue-forced. */
+    private static final String META_AUTO_TRUCE = "flagwar_war_auto_truce";
+    /** Metadata key on the attacker nation holding a comma-separated list of draft plots to return. */
+    private static final String META_TREATY_PLOTS = "flagwar_war_treaty_plots";
+    /** Metadata key on the attacker nation holding the draft reparations amount. */
+    private static final String META_TREATY_REPARATIONS = "flagwar_war_treaty_reparations";
+    /** Metadata key on the attacker nation holding the draft neutrality days. */
+    private static final String META_TREATY_NEUTRALITY_DAYS = "flagwar_war_treaty_neutrality_days";
+    /** Metadata key on the attacker nation holding whether the draft is a white peace. */
+    private static final String META_TREATY_WHITE_PEACE = "flagwar_war_treaty_white_peace";
+    /** Metadata key on the attacker nation holding whether the draft has been submitted. */
+    private static final String META_TREATY_SUBMITTED = "flagwar_war_treaty_submitted";
+    /** Metadata key on the attacker nation holding whether the attacker has accepted the draft. */
+    private static final String META_TREATY_ACCEPTED_ATTACKER = "flagwar_war_treaty_accepted_attacker";
+    /** Metadata key on the attacker nation holding whether the defender has accepted the draft. */
+    private static final String META_TREATY_ACCEPTED_DEFENDER = "flagwar_war_treaty_accepted_defender";
+    /** Metadata key on the attacker nation holding the sign-off timestamp. */
+    private static final String META_TREATY_SIGNED_AT = "flagwar_war_treaty_signed_at";
+    /** Metadata key on the attacker nation holding the last negotiation activity timestamp. */
+    private static final String META_NEGOTIATION_ACTIVITY = "flagwar_war_negotiation_activity";
     /** Metadata key on a traitor nation holding until when it is marked as a betrayer. */
     private static final String META_TRAITOR_UNTIL = "flagwar_traitor_until";
     /** Metadata key on an offended nation holding until when it may attack without the delay. */
@@ -72,6 +95,15 @@ public final class WarManager {
     private static final String META_SANCTIONED_UNTIL = "flagwar_sanctioned_until";
     /** Metadata key on a nation holding when its last truce ended, driving the truce cooldown. */
     private static final String META_LAST_TRUCE_END = "flagwar_last_truce_end";
+    /** Metadata key on a nation holding until when it may not re-open negotiations it aborted. */
+    private static final String META_ABORT_COOLDOWN_UNTIL = "flagwar_abort_cooldown_until";
+    /** Separator joining draft plot coordinates in the {@link #META_TREATY_PLOTS} string. */
+    private static final char PLOT_SEPARATOR = ';';
+    /** Length of a "world,x,z" plot coordinate token. */
+    private static final int PLOT_TOKEN_MIN_LENGTH = 3;
+
+    /** How often accumulated combat seconds are flushed to the attacker nation's metadata. */
+    private static final long COMBAT_PERSIST_INTERVAL = 30;
 
     /** Singleton instance. */
     private static WarManager instance;
@@ -117,6 +149,9 @@ public final class WarManager {
     public DiplomacyChannel openChannel(final WarState state) {
         if (activeChannel == null || !activeChannel.isOpen()) {
             activeChannel = new DiplomacyChannel(state.getAttacker(), state.getDefender());
+        } else if (!activeChannel.isBetween(state.getAttacker(), state.getDefender())) {
+            closeChannel();
+            activeChannel = new DiplomacyChannel(state.getAttacker(), state.getDefender());
         }
         return activeChannel;
     }
@@ -155,13 +190,14 @@ public final class WarManager {
     }
 
     /**
-     * Finds the war state a nation is part of.
+     * Finds all wars a nation is part of.
      * @param nation the nation to search for.
-     * @return the first matching war state, or null.
+     * @return every war state involving the nation, in insertion order.
      */
-    public WarState getStateFor(final Nation nation) {
-        return wars.values().stream().filter(state -> state.getAttacker() == nation || state.getDefender() == nation)
-            .findFirst().orElse(null);
+    public List<WarState> getWarsFor(final Nation nation) {
+        return wars.values().stream()
+            .filter(state -> state.getAttacker() == nation || state.getDefender() == nation)
+            .toList();
     }
 
     /**
@@ -212,6 +248,10 @@ public final class WarManager {
             }
             WarState state = new WarState(nation, defender);
             state.setPhase(parsePhase(getMetaString(nation, META_PHASE)));
+            Long phaseStartedAt = getMetaLong(nation, META_PHASE_STARTED_AT);
+            if (phaseStartedAt != null) {
+                state.setPhaseStartedAt(Instant.ofEpochMilli(phaseStartedAt));
+            }
             Long activeAt = getMetaLong(nation, META_ACTIVE_AT);
             if (activeAt != null) {
                 state.setActiveAt(Instant.ofEpochMilli(activeAt));
@@ -220,16 +260,68 @@ public final class WarManager {
             if (truceEndsAt != null) {
                 state.setTruceEndsAt(Instant.ofEpochMilli(truceEndsAt));
             }
-            Long remainingCapture = getMetaLong(nation, META_REMAINING_CAPTURE);
-            if (remainingCapture != null) {
-                state.setRemainingCaptureSeconds(remainingCapture);
-            }
             Long combatSeconds = getMetaLong(nation, META_COMBAT_SECONDS);
             if (combatSeconds != null) {
                 state.setCombatSecondsAccumulated(combatSeconds);
             }
+            state.setAutoTruce(Boolean.parseBoolean(getMetaString(nation, META_AUTO_TRUCE)));
+            Long negotiationActivity = getMetaLong(nation, META_NEGOTIATION_ACTIVITY);
+            if (negotiationActivity != null) {
+                state.setNegotiationLastActivity(Instant.ofEpochMilli(negotiationActivity));
+            }
+            restoreTreaty(state, nation);
             wars.put(state.getKey(), state);
         }
+    }
+
+    /**
+     * Restores a signed or pending treaty onto a war state from the attacker nation's metadata.
+     * @param state the war state.
+     * @param nation the attacking nation holding the treaty metadata.
+     */
+    private static void restoreTreaty(final WarState state, final Nation nation) {
+        String plots = getMetaString(nation, META_TREATY_PLOTS);
+        if (plots == null && getMetaLong(nation, META_TREATY_SIGNED_AT) == null) {
+            return;
+        }
+        Treaty treaty = new Treaty();
+        if (plots != null) {
+            for (String token : plots.split(Character.toString(PLOT_SEPARATOR))) {
+                String[] parts = token.split(",");
+                if (parts.length < PLOT_TOKEN_MIN_LENGTH) {
+                    continue;
+                }
+                try {
+                    treaty.addPlotToReturn(new WorldCoord(parts[0], Integer.parseInt(parts[1]),
+                        Integer.parseInt(parts[2])));
+                } catch (NumberFormatException ignored) {
+                    // A corrupted coordinate token cannot be restored; drop it.
+                }
+            }
+        }
+        String reparations = getMetaString(nation, META_TREATY_REPARATIONS);
+        if (reparations != null) {
+            try {
+                treaty.setReparations(Double.parseDouble(reparations));
+            } catch (NumberFormatException ignored) {
+                // A corrupted reparations value cannot be restored; default to zero.
+            }
+        }
+        Long neutralityDays = getMetaLong(nation, META_TREATY_NEUTRALITY_DAYS);
+        if (neutralityDays != null) {
+            treaty.setNeutralityDays(neutralityDays.intValue());
+        }
+        treaty.setWhitePeace(Boolean.parseBoolean(getMetaString(nation, META_TREATY_WHITE_PEACE)));
+        treaty.setAcceptedByAttacker(Boolean.parseBoolean(getMetaString(nation, META_TREATY_ACCEPTED_ATTACKER)));
+        treaty.setAcceptedByDefender(Boolean.parseBoolean(getMetaString(nation, META_TREATY_ACCEPTED_DEFENDER)));
+        Long signedAt = getMetaLong(nation, META_TREATY_SIGNED_AT);
+        if (signedAt != null && treaty.isAccepted()) {
+            treaty.acceptBy("attacker");
+            treaty.acceptBy("defender");
+        } else if (Boolean.parseBoolean(getMetaString(nation, META_TREATY_SUBMITTED))) {
+            treaty.submit();
+        }
+        state.setTreaty(treaty);
     }
 
     private WarPhase parsePhase(final String phaseName) {
@@ -251,11 +343,33 @@ public final class WarManager {
         Nation attacker = state.getAttacker();
         setMetaString(attacker, META_DEFENDER, state.getDefender().getName());
         setMetaString(attacker, META_PHASE, state.getPhase().name());
+        setMetaLong(attacker, META_PHASE_STARTED_AT, epoch(state.getPhaseStartedAt()));
         setMetaLong(attacker, META_ACTIVE_AT, epoch(state.getActiveAt()));
         setMetaLong(attacker, META_TRUCE_ENDS_AT, epoch(state.getTruceEndsAt()));
-        setMetaLong(attacker, META_REMAINING_CAPTURE, state.getRemainingCaptureSeconds());
         setMetaLong(attacker, META_COMBAT_SECONDS, state.getCombatSecondsAccumulated());
+        setMetaString(attacker, META_AUTO_TRUCE, state.isAutoTruce() ? "true" : null);
+        setMetaLong(attacker, META_NEGOTIATION_ACTIVITY, epoch(state.getNegotiationLastActivity()));
+        persistTreaty(state, attacker);
         attacker.save();
+    }
+
+    private static void persistTreaty(final WarState state, final Nation attacker) {
+        Treaty treaty = state.getTreaty();
+        if (treaty == null) {
+            return;
+        }
+        setMetaString(attacker, META_TREATY_PLOTS,
+            treaty.getPlotsToReturn().stream().map(WorldCoord::toString)
+                .collect(Collectors.joining(Character.toString(PLOT_SEPARATOR))));
+        setMetaString(attacker, META_TREATY_REPARATIONS, Double.toString(treaty.getReparations()));
+        setMetaLong(attacker, META_TREATY_NEUTRALITY_DAYS, (long) treaty.getNeutralityDays());
+        setMetaString(attacker, META_TREATY_WHITE_PEACE, treaty.isWhitePeace() ? "true" : null);
+        setMetaString(attacker, META_TREATY_SUBMITTED, treaty.isSubmitted() ? "true" : null);
+        setMetaString(attacker, META_TREATY_ACCEPTED_ATTACKER,
+            treaty.isAcceptedByAttacker() ? "true" : null);
+        setMetaString(attacker, META_TREATY_ACCEPTED_DEFENDER,
+            treaty.isAcceptedByDefender() ? "true" : null);
+        setMetaLong(attacker, META_TREATY_SIGNED_AT, epoch(treaty.getSignedAt()));
     }
 
     private static Long epoch(final Instant instant) {
@@ -274,10 +388,20 @@ public final class WarManager {
     private static void clearWarMetadata(final Nation attacker) {
         attacker.removeMetaData(META_DEFENDER);
         attacker.removeMetaData(META_PHASE);
+        attacker.removeMetaData(META_PHASE_STARTED_AT);
         attacker.removeMetaData(META_ACTIVE_AT);
         attacker.removeMetaData(META_TRUCE_ENDS_AT);
-        attacker.removeMetaData(META_REMAINING_CAPTURE);
         attacker.removeMetaData(META_COMBAT_SECONDS);
+        attacker.removeMetaData(META_AUTO_TRUCE);
+        attacker.removeMetaData(META_TREATY_PLOTS);
+        attacker.removeMetaData(META_TREATY_REPARATIONS);
+        attacker.removeMetaData(META_TREATY_NEUTRALITY_DAYS);
+        attacker.removeMetaData(META_TREATY_WHITE_PEACE);
+        attacker.removeMetaData(META_TREATY_SUBMITTED);
+        attacker.removeMetaData(META_TREATY_ACCEPTED_ATTACKER);
+        attacker.removeMetaData(META_TREATY_ACCEPTED_DEFENDER);
+        attacker.removeMetaData(META_TREATY_SIGNED_AT);
+        attacker.removeMetaData(META_NEGOTIATION_ACTIVITY);
         attacker.save();
     }
 
@@ -311,10 +435,16 @@ public final class WarManager {
             persist(state);
             TownyMessaging.sendGlobalMessage(Translate.fromPrefixed("war.truce.ended.broadcast",
                 state.getAttacker().getFormattedName(), state.getDefender().getFormattedName()));
+        } else if (phase == WarPhase.NEGOTIATING
+            && !Instant.now().isBefore(negotiationDeadline(state).plus(FlagWarConfig.getNegotiationTimeout()))) {
+            state.setPhase(WarPhase.ACTIVE);
+            state.setPhaseStartedAt(Instant.now());
+            persist(state);
+            TownyMessaging.sendPrefixedNationMessage(state.getAttacker(), Translate.from("war.negotiating.timedout"));
+            TownyMessaging.sendPrefixedNationMessage(state.getDefender(), Translate.from("war.negotiating.timedout"));
         } else if (phase == WarPhase.PEACE && state.getTreaty() != null
-            && state.getTreaty().getSignedAt() != null
-            && !Instant.now().isBefore(state.getTreaty().getSignedAt()
-                .plus(Duration.ofDays(state.getTreaty().getNeutralityDays())))) {
+            && !Instant.now().isBefore(state.getPhaseStartedAt()
+                .plus(Duration.ofDays(state.getTreaty().getSignedNeutralityDays())))) {
             state.setPhase(WarPhase.COOLDOWN);
             state.setPhaseStartedAt(Instant.now());
             persist(state);
@@ -322,6 +452,25 @@ public final class WarManager {
             && !Instant.now().isBefore(state.getPhaseStartedAt().plus(FlagWarConfig.getPeaceCooldown()))) {
             endWar(state);
         }
+    }
+
+    /**
+     * Returns the anchor used to measure the negotiation timeout.
+     * @param state the negotiating war.
+     * @return the last recorded activity, or the phase start when none has occurred.
+     */
+    private static Instant negotiationDeadline(final WarState state) {
+        Instant activity = state.getNegotiationLastActivity();
+        return activity == null ? state.getPhaseStartedAt() : activity;
+    }
+
+    /**
+     * Records a negotiation activity, resetting the timeout window.
+     * @param state the negotiating war.
+     */
+    public void touchNegotiation(final WarState state) {
+        state.setNegotiationLastActivity(Instant.now());
+        persist(state);
     }
 
     /**
@@ -334,12 +483,12 @@ public final class WarManager {
         if (!FlagWarConfig.isWarHooksEnabled()) {
             return true;
         }
-        if (hasVengeanceWindow(attackingNation)) {
-            return true;
-        }
         WarState state = findWarBetween(attackingNation, defendingNation).orElse(null);
         if (state == null) {
             return false;
+        }
+        if (hasVengeanceWindow(attackingNation)) {
+            return true;
         }
         return state.getPhase() == WarPhase.ACTIVE && !isArmisticeNow();
     }
@@ -352,10 +501,15 @@ public final class WarManager {
             return false;
         }
         ZonedDateTime now = ZonedDateTime.now();
+        LocalTime time = now.toLocalTime();
         for (var window : FlagWarConfig.getArmisticeWindows()) {
             if (window.getDays().contains(now.getDayOfWeek().name().toLowerCase())) {
-                if (!now.toLocalTime().isBefore(window.getStart())
-                    && now.toLocalTime().isBefore(window.getEnd())) {
+                LocalTime start = window.getStart();
+                LocalTime end = window.getEnd();
+                boolean inside = start.isBefore(end)
+                    ? !time.isBefore(start) && time.isBefore(end)
+                    : !time.isBefore(start) || time.isBefore(end);
+                if (inside) {
                     return true;
                 }
             }
@@ -393,7 +547,7 @@ public final class WarManager {
         state.setCombatSecondsAccumulated(accumulated);
         if (state.isFatigued()) {
             startTruce(state, true);
-        } else {
+        } else if (accumulated % COMBAT_PERSIST_INTERVAL == 0) {
             persist(state);
         }
     }
@@ -522,7 +676,7 @@ public final class WarManager {
     }
 
     /**
-     * Begins peace negotiations for the war, creating a fresh treaty.
+     * Begins peace negotiations for the war, creating a fresh draft treaty.
      * @param state the war state.
      * @return the created treaty.
      */
@@ -531,6 +685,7 @@ public final class WarManager {
         state.setTreaty(treaty);
         state.setPhase(WarPhase.NEGOTIATING);
         state.setPhaseStartedAt(Instant.now());
+        state.setNegotiationLastActivity(Instant.now());
         persist(state);
         TownyMessaging.sendGlobalMessage(Translate.fromPrefixed("war.negotiating.broadcast",
             state.getAttacker().getFormattedName(), state.getDefender().getFormattedName()));
@@ -539,12 +694,17 @@ public final class WarManager {
 
     /**
      * Executes a fully accepted treaty: transfers plots, pays reparations, and sets the neutrality phase.
+     * <p>
+     * The terms come from the frozen snapshot captured when the second side signed, so edits made
+     * between that moment and execution cannot change what is transferred.
+     * </p>
+     *
      * @param state the war state.
      * @return true when the peace was signed.
      */
     public boolean signPeace(final WarState state) {
         Treaty treaty = state.getTreaty();
-        if (treaty == null || !treaty.isAccepted()) {
+        if (treaty == null || !treaty.isAccepted() || !treaty.isSubmitted()) {
             return false;
         }
         executeTreaty(state, treaty);
@@ -558,7 +718,7 @@ public final class WarManager {
     }
 
     private void executeTreaty(final WarState state, final Treaty treaty) {
-        for (WorldCoord coord : treaty.getPlotsToReturn()) {
+        for (WorldCoord coord : treaty.getSignedPlots()) {
             try {
                 var townBlock = coord.getTownBlock();
                 var oldNation = townBlock.getTown().getNation();
@@ -572,12 +732,95 @@ public final class WarManager {
                 // Plot was unclaimed or its town has no nation since the treaty was drafted.
             }
         }
-        if (treaty.getReparations() > 0) {
-            state.getDefender().getAccount().withdraw(treaty.getReparations(),
-                "War - Treaty Reparations to " + state.getAttacker().getName());
-            state.getAttacker().getAccount().deposit(treaty.getReparations(),
+        double reparations = treaty.getSignedReparations();
+        if (reparations > 0
+            && state.getDefender().getAccount().withdraw(reparations,
+                "War - Treaty Reparations to " + state.getAttacker().getName())) {
+            state.getAttacker().getAccount().deposit(reparations,
                 "War - Treaty Reparations from " + state.getDefender().getName());
         }
+    }
+
+    /**
+     * Submits the current treaty draft to the other delegation.
+     * @param state the negotiating war.
+     * @return true when the draft was submitted.
+     */
+    public boolean submitTreaty(final WarState state) {
+        Treaty treaty = state.getTreaty();
+        if (treaty == null || state.getPhase() != WarPhase.NEGOTIATING || treaty.isSubmitted()) {
+            return false;
+        }
+        treaty.submit();
+        touchNegotiation(state);
+        TownyMessaging.sendPrefixedNationMessage(state.getAttacker(), Translate.from("war.treaty.submitted"));
+        TownyMessaging.sendPrefixedNationMessage(state.getDefender(), Translate.from("war.treaty.submitted"));
+        return true;
+    }
+
+    /**
+     * Accepts the submitted treaty draft on behalf of one nation, signing the peace when both sides agree.
+     * @param state the negotiating war.
+     * @param nation the accepting nation.
+     * @return true when the peace has been signed, false when only one side has accepted so far.
+     */
+    public boolean acceptTreaty(final WarState state, final Nation nation) {
+        Treaty treaty = state.getTreaty();
+        if (treaty == null || state.getPhase() != WarPhase.NEGOTIATING || !treaty.isSubmitted()) {
+            return false;
+        }
+        if (!treaty.isWhitePeace() && !treaty.hasConditions()) {
+            return false;
+        }
+        if (treaty.isAcceptedByAttacker() && treaty.isAcceptedByDefender()) {
+            return false;
+        }
+        String side = state.getAttacker() == nation ? "attacker" : "defender";
+        treaty.acceptBy(side);
+        touchNegotiation(state);
+        return signPeace(state);
+    }
+
+    /**
+     * Aborts the negotiations, resuming the war and placing the initiator on a cooldown.
+     * @param state the negotiating war.
+     * @param initiator the nation breaking off the talks.
+     */
+    public void abortNegotiations(final WarState state, final Nation initiator) {
+        state.setPhase(WarPhase.ACTIVE);
+        state.setPhaseStartedAt(Instant.now());
+        persist(state);
+        setMetaLong(initiator, META_ABORT_COOLDOWN_UNTIL,
+            Instant.now().plus(FlagWarConfig.getNegotiationAbortCooldown()).toEpochMilli());
+        initiator.save();
+        String message = Translate.fromPrefixed("war.negotiating.aborted", initiator.getFormattedName());
+        TownyMessaging.sendPrefixedNationMessage(state.getAttacker(), message);
+        TownyMessaging.sendPrefixedNationMessage(state.getDefender(), message);
+        closeChannel();
+    }
+
+    /**
+     * @param nation the nation to check.
+     * @return true when the nation may not re-open negotiations with a pair it recently aborted.
+     */
+    public boolean isNegotiationAbortCooldownActive(final Nation nation) {
+        Long until = getMetaLong(nation, META_ABORT_COOLDOWN_UNTIL);
+        return until != null && Instant.now().isBefore(Instant.ofEpochMilli(until));
+    }
+
+    /**
+     * @param nation the nation whose bank is checked.
+     * @return true when the nation can pay the proposed reparations on top of its bankruptcy reserve.
+     */
+    public boolean canPayReparations(final Nation nation) {
+        double reparations = 0;
+        for (WarState state : getWarsFor(nation)) {
+            Treaty treaty = state.getTreaty();
+            if (treaty != null && state.getPhase() == WarPhase.NEGOTIATING && nation == state.getDefender()) {
+                reparations += treaty.getReparations();
+            }
+        }
+        return nation.getAccount().canPayFromHoldings(reparations);
     }
 
     private boolean isNationOnline(final Nation nation) {

@@ -731,6 +731,18 @@ public final class FlagWarConfig {
         return PLUGIN.getConfig().getInt("negotiation.delegation-size", DEFAULT_DELEGATION_SIZE);
     }
 
+    /** @return how long peace negotiations may run before timing out. */
+    public static Duration getNegotiationTimeout() {
+        final String value = PLUGIN.getConfig().getString("negotiation.timeout", "2h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
+    /** @return how long a nation that aborted negotiations may not re-open them with the same opponent. */
+    public static Duration getNegotiationAbortCooldown() {
+        final String value = PLUGIN.getConfig().getString("betrayal.abort-cooldown", "24h");
+        return Duration.ofSeconds(TimeTools.getSeconds(value));
+    }
+
     /**
      * Formats a {@link Duration} for human-readable broadcast messages.
      * @param duration the duration to format.

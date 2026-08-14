@@ -27,6 +27,7 @@ import io.github.townyadvanced.flagwar.events.CellWonEvent;
 import io.github.townyadvanced.flagwar.events.PlotCapturedEvent;
 import io.github.townyadvanced.flagwar.war.DiplomacyChannel;
 import io.github.townyadvanced.flagwar.war.WarManager;
+import io.github.townyadvanced.flagwar.war.WarPhase;
 import io.github.townyadvanced.flagwar.war.WarState;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -85,7 +86,7 @@ public class FlagWarWarListener implements Listener {
      * Accounts each captured plot toward the war and fires {@link PlotCapturedEvent} for the political core.
      * @param cellWonEvent the flag-capture victory event.
      */
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     @SuppressWarnings("unused")
     public void onCellWon(final CellWonEvent cellWonEvent) {
         if (!FlagWarConfig.isWarHooksEnabled()) {
@@ -115,8 +116,14 @@ public class FlagWarWarListener implements Listener {
         }
         WarManager manager = WarManager.getInstance();
         WarState state = manager.findWarBetween(attackingNation, defendingNation).orElse(null);
-        if (state != null) {
-            manager.accumulateCombatTime(state);
+        if (state == null) {
+            return;
+        }
+        manager.accumulateCombatTime(state);
+        // While negotiating, captured plots become eligible for a treaty return.
+        if (state.getPhase() == WarPhase.NEGOTIATING && state.getTreaty() != null) {
+            state.getTreaty().addPlotToReturn(coord);
+            manager.persist(state);
         }
         Bukkit.getPluginManager().callEvent(new PlotCapturedEvent(coord, defendingNation.getName(),
             attackingNation.getName(), "flag"));

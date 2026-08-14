@@ -794,16 +794,16 @@ public class FlagWar extends JavaPlugin {
             WarState state = WarManager.getInstance().findWarBetween(attackingNation, landOwnerNation).orElse(null);
             String reason;
             if (state == null || state.getPhase() == WarPhase.NONE) {
-                reason = Translate.from("war.error.no-war-between");
+                reason = Translate.fromPrefixed("war.error.no-war-between");
             } else {
                 reason = switch (state.getPhase()) {
-                    case DECLARED -> Translate.from("war.error.declared-pending",
+                    case DECLARED -> Translate.fromPrefixed("war.error.declared-pending",
                         FlagWarConfig.formatDuration(java.time.Duration.between(java.time.Instant.now(),
                             state.getActiveAt())));
-                    case TRUCE -> Translate.from("war.error.truce-active");
-                    case NEGOTIATING -> Translate.from("war.error.negotiating-active");
-                    case PEACE -> Translate.from("war.error.peace-active");
-                    default -> Translate.from("war.error.no-war-between");
+                    case TRUCE -> Translate.fromPrefixed("war.error.truce-active");
+                    case NEGOTIATING -> Translate.fromPrefixed("war.error.negotiating-active");
+                    case PEACE -> Translate.fromPrefixed("war.error.peace-active");
+                    default -> Translate.fromPrefixed("war.error.no-war-between");
                 };
             }
             throw new TownyException(reason);

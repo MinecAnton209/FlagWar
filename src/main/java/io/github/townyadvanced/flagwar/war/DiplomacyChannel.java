@@ -72,10 +72,11 @@ public class DiplomacyChannel {
                 continue;
             }
             if (isDiplomat(resident)) {
-                members.add(resident.getUUID());
-                if (diplomatSlots-- <= 0) {
+                if (diplomatSlots <= 0) {
                     break;
                 }
+                members.add(resident.getUUID());
+                diplomatSlots--;
             }
         }
     }
@@ -97,6 +98,16 @@ public class DiplomacyChannel {
     /** @return whether the channel is open for traffic. */
     public boolean isOpen() {
         return open;
+    }
+
+    /**
+     * @param firstNation one of the two nations.
+     * @param secondNation the other nation.
+     * @return true when this channel serves the given pair of nations.
+     */
+    public boolean isBetween(final Nation firstNation, final Nation secondNation) {
+        return (attacker == firstNation && defender == secondNation)
+            || (attacker == secondNation && defender == firstNation);
     }
 
     /**
